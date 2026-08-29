@@ -12,3 +12,6 @@ dataset
 tmp
 
 *.tar.gz
+
+runs
+*.pt

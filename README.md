@@ -35,3 +35,7 @@ truck
 | | MGV（中型货车） |
 | | HGV（重型货车） |
 | | Container（集装箱车） |
+
+
+tar -czvf NoSuit_cls_clean_aug_split.tar.gz ./dataset/NoSuit_cls_clean_aug_split
+tar -zxvf data.tar.gz
