@@ -7,16 +7,17 @@ def main():
     SETTINGS["tensorboard"] = True
     
     current_time = datetime.now().strftime("%Y%m%d_%H%M")
-    run_name = f"yolo26m_traffic_{current_time}"
-    
+    run_name = f"yolo26m_merge8_{current_time}"
+
     model = YOLO("yolo26m.pt")
 
     model.train(
-        data="dataset/dataset_merged_v2/data.yaml",
+        data="dataset/batch_12.v10i.merge8.yolov11/data.yaml",
         epochs=500,
-        patience=100,
+        patience=50,
         imgsz=640,
         batch=64,
+        cos_lr=True,
         device=-1,
         name=run_name,
         workers=8,

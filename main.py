@@ -8,7 +8,8 @@ from ultralytics import YOLO
 # ================= 配置参数 =================
 RTSP_URL = "rtsp://118.140.234.166:8554/dahua1001619"
 # RTSP_URL = "rtsp://118.140.234.166:8554/dahua1001620"
-MODEL_PATH = r"best.pt"
+# MODEL_PATH = r"best.pt"
+MODEL_PATH = r"runs\detect\yolo26m_traffic_van_focus_20260902_0201\weights\best.pt"
 CONF_THRES = 0.4
 DEVICE = 0
 
