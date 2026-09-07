@@ -2,22 +2,66 @@ import av
 import cv2
 import threading
 import time
+import numpy as np
 import torch
 from ultralytics import YOLO
 
 # ================= 配置参数 =================
 RTSP_URL = "rtsp://118.140.234.166:8554/dahua1001619"
 # RTSP_URL = "rtsp://118.140.234.166:8554/dahua1001620"
-# MODEL_PATH = r"best.pt"
-MODEL_PATH = r"runs\detect\yolo26m_traffic_van_focus_20260902_0201\weights\best.pt"
+MODEL_PATH = r"runs\detect\yolo26m_merge8_20260903_0950\weights\best.pt"
 CONF_THRES = 0.4
 DEVICE = 0
 
-# 推理图像尺寸：建议设为 1280 或 1920，避免直接传入 (h, w) 导致内部 resize 扭曲
 IMGSZ = 1280
-
-# 设为 None 表示不过滤，检测模型训练好的全部 12 个类别
 KEEP_CLASSES = None 
+
+# ================= 鱼眼参数设置 =================
+# k1 > 0 表示桶形膨胀（中间凸起），数值越大鱼眼效果越剧烈（建议范围：0.2 ~ 0.8）
+FISHEYE_K1 = 0.5
+FISHEYE_K2 = 0.1
+# 画面放缩因子：膨胀后四周会有黑边，可以调大（如 1.2 ~ 1.5）来放大画面填满视野
+SCALE = 1.0
+
+
+class FisheyeTransform:
+    """鱼眼（桶形膨胀）效果生成器"""
+    def __init__(self, width, height, k1=0.5, k2=0.1, scale=1.0):
+        self.w = width
+        self.h = height
+        
+        cx, cy = width / 2.0, height / 2.0
+        fx = fy = max(width, height) / 2.0
+        
+        # 原始相机内参
+        K = np.array([[fx, 0, cx],
+                      [0, fy, cy],
+                      [0,  0,  1]], dtype=np.float32)
+        
+        # 桶形畸变系数：k1 为正数会产生凸起鱼眼效果
+        D = np.array([k1, k2, 0.0, 0.0, 0.0], dtype=np.float32)
+        
+        # 新内参矩阵（调整 scale 可以放大/缩小鱼眼画面，隐藏边缘黑边）
+        new_K = K.copy()
+        new_K[0, 0] *= scale
+        new_K[1, 1] *= scale
+        
+        # 使用 initUndistortRectifyMap 计算映射表
+        # 注意：这里交换了 K 和 new_K 的位置，以实现正向的“鱼眼膨胀”效果
+        self.map1, self.map2 = cv2.initUndistortRectifyMap(
+            new_K, D, np.eye(3), K, (width, height), cv2.CV_32FC1
+        )
+
+    def apply(self, img):
+        """应用鱼眼效果，边缘填充黑色"""
+        return cv2.remap(
+            img, 
+            self.map1, 
+            self.map2, 
+            interpolation=cv2.INTER_LINEAR, 
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0)
+        )
 
 
 class AVStreamer:
@@ -96,8 +140,9 @@ def main():
     print(f"连接 RTSP... {RTSP_URL}")
     streamer = AVStreamer(RTSP_URL)
 
-    # 使用 WINDOW_AUTOSIZE 保持原生 1:1 像素映射，防止窗口缩放导致画面双线性插值变糊
     cv2.namedWindow("Traffic Preview", cv2.WINDOW_AUTOSIZE)
+
+    fisheye = None
 
     print("开始实时预览（按 'q' 或 'ESC' 退出）...")
 
@@ -112,9 +157,23 @@ def main():
                 # 截取左半区域
                 left = frame[:, : frame.shape[1] // 2]
 
-                # YOLO 追踪推理
+                # 动态初始化鱼眼变换类
+                if fisheye is None:
+                    h, w = left.shape[:2]
+                    fisheye = FisheyeTransform(
+                        width=w, 
+                        height=h, 
+                        k1=FISHEYE_K1, 
+                        k2=FISHEYE_K2, 
+                        scale=SCALE
+                    )
+
+                # 1. 增加鱼眼（凸起）效果
+                left_fisheye = fisheye.apply(left)
+
+                # 2. YOLO 追踪推理
                 results = model.track(
-                    left,
+                    left_fisheye,
                     conf=CONF_THRES,
                     imgsz=IMGSZ,
                     verbose=False,
@@ -124,10 +183,10 @@ def main():
                     tracker="bytetrack.yaml",
                 )
 
-                # 修正参数名：line_thickness -> line_width，移除不兼容的 font_size
+                # 3. 绘制检测框
                 annotated_frame = results[0].plot(
-                    line_width=1,  # 强制 1 像素细线条，解决粗框变糊问题
-                    pil=False,     # 使用 OpenCV 原生绘制，边缘更清晰
+                    line_width=1,
+                    pil=False,
                     boxes=True,
                     labels=True,
                     probs=False,
