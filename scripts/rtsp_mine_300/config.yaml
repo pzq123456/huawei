@@ -1,0 +1,69 @@
+# 双流 300 张采集配置
+streams:
+  - {name: dahua1001637, url: "rtsp://118.140.234.166:8554/dahua1001637", quota: 38, crop: auto-left}
+  - {name: dahua1001636, url: "rtsp://118.140.234.166:8554/dahua1001636", quota: 38, crop: auto-left}
+  - {name: dahua1001527, url: "rtsp://118.140.234.166:8554/dahua1001527", quota: 38, crop: auto-left}
+  - {name: dahua1001638, url: "rtsp://118.140.234.166:8554/dahua1001638", quota: 38, crop: auto-left}
+  - {name: dahua1001780, url: "rtsp://118.140.234.166:8554/dahua1001780", quota: 38, crop: auto-left}
+  - {name: dahua1001798, url: "rtsp://118.140.234.166:8554/dahua1001798", quota: 38, crop: auto-left}
+  - {name: dahua1001871, url: "rtsp://118.140.234.166:8554/dahua1001871", quota: 38, crop: auto-left}
+  - {name: dahua1001956, url: "rtsp://118.140.234.166:8554/dahua1001956", quota: 38, crop: auto-left}
+
+model:
+  # 11类(v9)模型：名含merge8但实为v9口径，可直接分辨 LGV/HGV/Coach/Light Bus，匹配 classes.txt
+  weights: "runs/detect/yolo26m_merge8_20260903_0950/weights/best.pt"
+  fallback: "runs/detect/yolo26m_merge8_20260902_0916/weights/best.pt"
+  scoring_alt: "runs/detect/yolo26m_plrepair2_20260909_0023/weights/best.pt"  # 8类高召回，备选
+  imgsz: 640
+  conf_scoring: 0.30      # 打分用低阈，召回稀有类
+  device: 0
+
+# 类别口径: v9 (11类, 默认) 或 merge8 (8类)
+classes: v9
+names_v9: ['Coach', 'Franchised Bus', 'HGV', 'LGV', 'Light Bus', 'MGV', 'Motorcycle', 'PLB GMB', 'Private Car', 'Taxi', 'Van']
+names_merge8: ['Bus', 'Franchised Bus', 'Truck', 'Motorcycle', 'PLB GMB', 'Private Car', 'Taxi', 'Van']
+
+sampling:
+  detect_interval: 2.0     # 送检间隔(s)，时间间隔大一点保证多样性
+  min_save_interval: 30.0  # 同相机落盘最小间隔(s)
+  target_total: 300
+  phash_thresh: 8          # 汉明距离小于此判重
+  car_only_max_ratio: 0.15 # PrivateCar-only 帧占比上限
+  gray_filter:            # 灰屏/无信号帧过滤（均匀灰：低方差+低饱和+三通道相等）
+    std_thresh: 12.0
+    sat_thresh: 12.0
+    chan_diff_thresh: 8.0
+
+scoring:
+  w_cls: 1.0
+  w_box: 0.3
+  rare_w:                 # 稀有加权（v9口径）
+    LGV: 5.0
+    HGV: 5.0
+    Motorcycle: 3.0
+    PLB GMB: 2.0
+    Coach: 1.5
+    Light Bus: 1.5
+    Van: 1.5
+    MGV: 1.0
+    Bus: 1.5
+    Truck: 5.0
+    Franchised Bus: 0.5
+    Taxi: 0.2
+    Private Car: 0.1
+
+balance:                  # 弱类平衡：过滤空帧/单辆私家车，限制强类帧数
+  drop_empty: true        # 无检出帧丢弃（由 no-det 实现）
+  drop_single_private_car: true   # 只有 1 辆且为 Private Car 的帧丢弃
+  weak_classes: ['LGV', 'HGV', 'Motorcycle', 'PLB GMB', 'Coach', 'Light Bus', 'Van']
+  strong_frame_caps:      # 不含弱类的帧中，含该类帧数上限（超过则丢弃）
+    Private Car: 40
+    Taxi: 30
+    MGV: 80
+    Franchised Bus: 20
+
+output:
+  dataset_dir: "dataset/rtsp_mine_300_b2_pending"
+  run_log_dir: "output/rtsp_mine_300"
+  json_mode: prelabel     # empty | prelabel（已确认为 prelabel，人工改框）
+  jpeg_quality: 95

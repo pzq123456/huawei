@@ -17,3 +17,5 @@ runs
 *.pt
 
 logs
+exp_highway_*/
+output

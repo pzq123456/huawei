@@ -77,3 +77,8 @@ tar -zxvf data.tar.gz
 2. 新边界 Van <-> Truck(原 LGV 与 Van 语义同源)与 PLB GMB <-> Bus 需重点关注
 
 预期:类间误报内化约四成,mAP50 自 0.856 提升;background 漏检(各类 4–12%)不受合并影响,属另一议题
+
+camera_id	code	name	rtsp
+1003	1000227	Mobile Camera1003	rtsp://118.140.234.166:8554/dahua1003
+866	1000226	Mobile Camera0866	rtsp://118.140.234.166:8554/dahua866
+548	1000172	Mobile Camera0548	rtsp://118.140.234.166:8554/dahua548
