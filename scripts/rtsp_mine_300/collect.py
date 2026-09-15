@@ -102,6 +102,7 @@ def main():
     ap.add_argument('--target', type=int, default=None)
     ap.add_argument('--json-mode', choices=['empty', 'prelabel'], default=None)
     ap.add_argument('--out-dir', default=None, help='覆盖 config 的 dataset_dir（分批采集用）')
+    ap.add_argument('--resume', action='store_true', help='断点续采：不清空已有图片/manifest，只补采 --target 张')
     ap.add_argument('--smoke-test', action='store_true')
     args = ap.parse_args()
 
@@ -159,9 +160,15 @@ def main():
     cls_frame_cnt = Counter()
     t_start = time.time()
     smoke_deadline = 150.0  # smoke-test 最多等待150s，避免流不通时无限挂起
-    manifest_f = open(ds_dir / 'manifest.csv', 'w', newline='', encoding='utf-8')
+    existing = len(list(img_dir.glob('*.jpg'))) if args.resume else 0
+    manifest_path = ds_dir / 'manifest.csv'
+    manifest_exists = manifest_path.exists() and manifest_path.stat().st_size > 0
+    manifest_f = open(manifest_path, 'a' if (args.resume and manifest_exists) else 'w',
+                      newline='', encoding='utf-8')
     manifest = csv.writer(manifest_f)
-    manifest.writerow(['file', 'cam', 'timestamp', 'score', 'n_box', 'n_cls', 'rare_hit', 'weak_hit', 'json_mode'])
+    if not (args.resume and manifest_exists):
+        manifest.writerow(['file', 'cam', 'timestamp', 'score', 'n_box', 'n_cls', 'rare_hit', 'weak_hit', 'json_mode'])
+    print(f"resume={args.resume} existing={existing} 本次补采目标={target}", flush=True)
     with open(run_log, 'w', newline='', encoding='utf-8') as log_f:
         log = csv.writer(log_f)
         log.writerow(['file', 'cam', 'score', 'n_box', 'n_cls', 'rare_hit', 'saved', 'reason'])
@@ -211,6 +218,8 @@ def main():
                             reason = 'dup-phash'
                         elif drop_single and len(labels) == 1 and labels[0] == 'Private Car':
                             reason = 'single-private-car'
+                        elif bal.get('require_weak') and not (set(labels) & weak_classes):
+                            reason = 'no-weak'
                         elif not (set(labels) & weak_classes) and any(
                                 cls_frame_cnt[c] >= strong_caps.get(c, 10 ** 9) for c in set(labels)
                                 if c in strong_caps):
@@ -230,7 +239,7 @@ def main():
                                 cls_frame_cnt[c] += 1
                             if set(labels) == {'Private Car'}:
                                 car_only += 1
-                            print(f"[{saved}/{target}] {fname} score={sc:.1f} {labels}", flush=True)
+                            print(f"[{existing + saved}/{existing + target}] {fname} score={sc:.1f} {labels}", flush=True)
                             manifest.writerow([fname, s['name'], ts, f"{sc:.2f}",
                                                len(labels), len(set(labels)), rare_hit,
                                                int(bool(set(labels) & weak_classes)), json_mode])
@@ -243,7 +252,7 @@ def main():
             for r in readers:
                 r.stopped = True
             manifest_f.close()
-    print(f'done: {saved} 张 -> {ds_dir}，过程日志 {run_log}')
+    print(f'done: 本次 {saved} 张，累计 {existing + saved} 张 -> {ds_dir}，过程日志 {run_log}')
 
 
 if __name__ == '__main__':

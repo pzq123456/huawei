@@ -55,15 +55,16 @@ scoring:
 balance:                  # 弱类平衡：过滤空帧/单辆私家车，限制强类帧数
   drop_empty: true        # 无检出帧丢弃（由 no-det 实现）
   drop_single_private_car: true   # 只有 1 辆且为 Private Car 的帧丢弃
+  require_weak: true      # 第3批(晨间)：只保留含弱类的帧，最大化稀缺类覆盖
   weak_classes: ['LGV', 'HGV', 'Motorcycle', 'PLB GMB', 'Coach', 'Light Bus', 'Van']
-  strong_frame_caps:      # 不含弱类的帧中，含该类帧数上限（超过则丢弃）
+  strong_frame_caps:      # require_weak=false 时生效；含弱类帧不受限
     Private Car: 40
     Taxi: 30
     MGV: 80
     Franchised Bus: 20
 
 output:
-  dataset_dir: "dataset/rtsp_mine_300_b2_pending"
+  dataset_dir: "dataset/rtsp_mine_600_b3_pending"
   run_log_dir: "output/rtsp_mine_300"
   json_mode: prelabel     # empty | prelabel（已确认为 prelabel，人工改框）
   jpeg_quality: 95
