@@ -15,6 +15,7 @@ from collections import Counter
 from pathlib import Path
 
 import cv2
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 VEH = {"car", "motorcycle", "bus", "truck"}
@@ -30,9 +31,25 @@ def main():
     ap.add_argument("--apply", action="store_true", help="把标记帧移到 quarantine")
     ap.add_argument("--remove-only-moto", action="store_true",
                     help="仅移除我方标签全为 Motorcycle 的标记帧（避免误伤 COCO 漏检的真车）")
+    ap.add_argument("--config", default="scripts/rtsp_mine_300/config.yaml",
+                    help="用于检查 conf_low_classes 的采集配置")
+    ap.add_argument("--allow-bare-apply", action="store_true",
+                    help="显式确认：明知存在低置信度补充框，仍允许裸 --apply")
     ap.add_argument("--quarantine", default="_removed_empty")
     ap.add_argument("--montage-max", type=int, default=48)
     args = ap.parse_args()
+
+    # 硬检查：采集配置启用了低阈补充框时，禁止裸 --apply（避免被 COCO 漏检的弱类框误删）
+    if args.apply and not args.remove_only_moto and not args.allow_bare_apply:
+        cfgp = ROOT / args.config
+        low = []
+        if cfgp.is_file():
+            _cfg = yaml.safe_load(open(cfgp, encoding="utf-8")) or {}
+            low = (_cfg.get("model", {}) or {}).get("conf_low_classes") or []
+        if low:
+            raise SystemExit(
+                f"[拒绝执行] {cfgp} 的 conf_low_classes 非空 {low}：低置信度补充框可能被 COCO "
+                f"漏检而误判为空镜删除。请改用 --remove-only-moto，或显式加 --allow-bare-apply 确认。")
 
     from ultralytics import YOLO
     import torch

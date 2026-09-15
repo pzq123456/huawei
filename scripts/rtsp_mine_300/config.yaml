@@ -15,7 +15,11 @@ model:
   fallback: "runs/detect/yolo26m_merge8_20260902_0916/weights/best.pt"
   scoring_alt: "runs/detect/yolo26m_plrepair2_20260909_0023/weights/best.pt"  # 8类高召回，备选
   imgsz: 640
-  conf_scoring: 0.30      # 打分用低阈，召回稀有类
+  conf_scoring: 0.30      # 强类阈值/打分基线
+  conf_low: 0.10          # 低阈出框，交人工判断（覆盖 conf_low_classes）
+  conf_low_classes: ['HGV', 'LGV', 'PLB GMB', 'Coach', 'Light Bus', 'Van']
+  conf_overrides:         # 单类覆盖：Motorcycle 低召回+高幻觉，维持高阈避免放大 FP
+    Motorcycle: 0.35
   device: 0
 
 # 类别口径: v9 (11类, 默认) 或 merge8 (8类)
@@ -26,6 +30,8 @@ names_merge8: ['Bus', 'Franchised Bus', 'Truck', 'Motorcycle', 'PLB GMB', 'Priva
 sampling:
   detect_interval: 2.0     # 送检间隔(s)，时间间隔大一点保证多样性
   min_save_interval: 30.0  # 同相机落盘最小间隔(s)
+  unconditional_interval: 180.0   # 无条件落盘间隔(s)：不依赖模型检出，补 no-det 盲区；0=关闭
+  unconditional_max_ratio: 0.15   # 无条件帧占总 target 的比例上限，避免挤占弱类配额
   target_total: 300
   phash_thresh: 8          # 汉明距离小于此判重
   car_only_max_ratio: 0.15 # PrivateCar-only 帧占比上限
@@ -33,6 +39,12 @@ sampling:
     std_thresh: 12.0
     sat_thresh: 12.0
     chan_diff_thresh: 8.0
+
+clean_capture:            # 车辆清晰截取
+  enabled: true
+  edge_margin: 2          # 框距边界 <= 该像素即视为贴边（拼缝侧不计）
+  min_box_area_frac: 0.0015  # 最小框面积占全图比例（1920x1080 约 56x56 像素）
+  laplacian_var_min: 100.0   # 框内 Laplacian 方差下限，过滤运动模糊/过小目标
 
 scoring:
   w_cls: 1.0
@@ -57,6 +69,9 @@ balance:                  # 弱类平衡：过滤空帧/单辆私家车，限制
   drop_single_private_car: true   # 只有 1 辆且为 Private Car 的帧丢弃
   require_weak: true      # 第3批(晨间)：只保留含弱类的帧，最大化稀缺类覆盖
   weak_classes: ['LGV', 'HGV', 'Motorcycle', 'PLB GMB', 'Coach', 'Light Bus', 'Van']
+  soft_cam_class_cap: 60  # 同机位同类每批次软上限；超过后按概率降采样（0=关闭）
+  soft_cap_drop_prob: 0.8 # 触发软上限时的丢弃概率（软，不硬删，保采集连续性）
+  # 注：软上限计数写入 <dataset_dir>/soft_cap_state.json，--resume 时跨重启保留
   strong_frame_caps:      # require_weak=false 时生效；含弱类帧不受限
     Private Car: 40
     Taxi: 30

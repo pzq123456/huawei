@@ -12,16 +12,21 @@ VERSION = "2.4.0"  # 与用户示例一致
 
 
 def to_xany(image_path: str, width: int, height: int, boxes: list) -> dict:
-    """boxes: [(label:str, x1,y1,x2,y2 in pixels, conf:float|None), ...]，传 [] 即纯待标注空JSON。"""
+    """boxes: [(label:str, x1,y1,x2,y2 in pixels, conf:float|None), ...]，传 [] 即纯待标注空JSON。
+
+    conf 写入 shape.attributes['conf']，供事后区分低置信度补充框（验证稀缺类补偿效果）。"""
     shapes = []
     for label, x1, y1, x2, y2, *rest in boxes:
+        attrs = {}
+        if rest and rest[0] is not None:
+            attrs["conf"] = round(float(rest[0]), 4)
         shapes.append({
             "label": str(label),
             "points": [[float(x1), float(y1)], [float(x2), float(y2)]],
             "shape_type": "rectangle",
             "group_id": None,
             "difficult": False,
-            "attributes": {},
+            "attributes": attrs,
         })
     return {
         "version": VERSION,
