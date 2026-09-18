@@ -26,6 +26,8 @@ def main():
     ap.add_argument("--dataset", default="dataset/rtsp_mine_1200_merged")
     ap.add_argument("--coco-weights", default=r"C:\Users\admin\Desktop\personal\gprBox\yolo26m.pt")
     ap.add_argument("--conf", type=float, default=0.25)
+    ap.add_argument("--min-vehicles", type=int, default=1,
+                    help="保留所需的最少车辆数；COCO 检出数 < 此值即标记（默认1=仅去空镜）")
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
     ap.add_argument("--apply", action="store_true", help="把标记帧移到 quarantine")
@@ -80,7 +82,7 @@ def main():
             rec = dict(file=img.name, coco_veh=len(coco), coco_labels=";".join(coco),
                        our_boxes=len(ours), our_labels=";".join(sorted(set(ours))))
             rows.append(rec)
-            if len(coco) == 0:
+            if len(coco) < args.min_vehicles:
                 flagged.append(rec)
             if (i + 1) % 200 == 0:
                 print(f"  {i + 1}/{len(imgs)}  flagged={len(flagged)}", flush=True)
@@ -92,7 +94,7 @@ def main():
         w.writeheader()
         w.writerows(rows)
 
-    print(f"\ntotal={len(rows)}  flagged(coco_veh==0)={len(flagged)}  "
+    print(f"\ntotal={len(rows)}  flagged(coco_veh<{args.min_vehicles})={len(flagged)}  "
           f"({len(flagged)/max(1,len(rows))*100:.1f}%)")
     print("of flagged, our-tail label mix:", dict(Counter(l for r in flagged for l in r["our_labels"].split(";") if l)))
 
@@ -110,7 +112,7 @@ def main():
                 cv2.putText(im, s["label"], (int(x1), max(12, int(y1) - 4)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
         cv2.rectangle(im, (0, 0), (520, 24), (0, 0, 0), -1)
-        cv2.putText(im, rec["file"].split("_")[-1] + " coco=0", (6, 18),
+        cv2.putText(im, f"{rec['file'].split('_')[-1]} coco={rec['coco_veh']}", (6, 18),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
         tiles.append(cv2.resize(im, (520, 292)))
     if tiles:

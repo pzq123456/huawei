@@ -8,6 +8,11 @@ streams:
   - {name: dahua1001798, url: "rtsp://118.140.234.166:8554/dahua1001798", quota: 38, crop: auto-left}
   - {name: dahua1001871, url: "rtsp://118.140.234.166:8554/dahua1001871", quota: 38, crop: auto-left}
   - {name: dahua1001956, url: "rtsp://118.140.234.166:8554/dahua1001956", quota: 38, crop: auto-left}
+  # ICC 直播（不在 8554 网关；URL+token 动态取，见 docs/icc_live_rtsp.md）
+  - {name: cam2181, icc_device: "1002605", icc_channel: 0, icc_code: HK02, quota: 38, crop: none}
+  - {name: cam2200, icc_device: "1002689", icc_channel: 0, icc_code: HK02, quota: 38, crop: none}
+  - {name: cam2249, icc_device: "1002712", icc_channel: 0, icc_code: HK02, quota: 38, crop: none}
+  - {name: cam2250, icc_device: "1002711", icc_channel: 0, icc_code: HK02, quota: 38, crop: none}
 
 model:
   # 11类(v9)模型：名含merge8但实为v9口径，可直接分辨 LGV/HGV/Coach/Light Bus，匹配 classes.txt

@@ -19,3 +19,6 @@ runs
 logs
 exp_highway_*/
 output
+
+# ICC 凭据（切勿提交）
+scripts/rtsp_mine_300/icc_credentials.json

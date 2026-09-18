@@ -84,41 +84,55 @@ def roi_sharpness(img, xyxy) -> float:
 
 
 class StreamReader(threading.Thread):
-    """单流 PyAV 读取线程（复用 scripts/collect_data.py 的 EventAVStreamer 思想）。"""
+    """单流 PyAV 读取线程（复用 scripts/collect_data.py 的 EventAVStreamer 思想）。
 
-    def __init__(self, url: str, interval: float):
+    url 可为字符串，或返回最新 URL 的 callable（ICC 直播 token 每次开流重取）。"""
+
+    def __init__(self, url, interval: float, name: str = "", on_stop=None):
         super().__init__(daemon=True)
         self.url = url
         self.interval = interval
+        self.name = name or (url if isinstance(url, str) else "icc")
+        self.on_stop = on_stop
         self.q: queue.Queue = queue.Queue(maxsize=1)
         self.stopped = False
+
+    def _resolve_url(self):
+        return self.url() if callable(self.url) else self.url
 
     def run(self):
         import av
         last_push = 0.0
         container = None
-        while not self.stopped:
-            try:
-                if container is None:
-                    container = av.open(self.url, options={"rtsp_transport": "tcp", "stimeout": "8000000"})
-                for frame in container.decode(video=0):
-                    if self.stopped:
-                        return
-                    now = time.time()
-                    if now - last_push < self.interval:
-                        continue
-                    img = frame.to_ndarray(format="bgr24")
-                    last_push = now
-                    if self.q.full():
-                        try:
-                            self.q.get_nowait()
-                        except queue.Empty:
-                            pass
-                    self.q.put(img)
-            except Exception as e:  # noqa: BLE001 - 拉流需容错重连
-                print(f"[解码中断 {self.url}] {e}，重连...")
-                container = None
-                time.sleep(1.0)
+        try:
+            while not self.stopped:
+                try:
+                    if container is None:
+                        container = av.open(self._resolve_url(),
+                                            options={"rtsp_transport": "tcp", "stimeout": "8000000"})
+                    for frame in container.decode(video=0):
+                        if self.stopped:
+                            return
+                        now = time.time()
+                        if now - last_push < self.interval:
+                            continue
+                        img = frame.to_ndarray(format="bgr24")
+                        last_push = now
+                        if self.q.full():
+                            try:
+                                self.q.get_nowait()
+                            except queue.Empty:
+                                pass
+                        self.q.put(img)
+                except Exception as e:  # noqa: BLE001 - 拉流需容错重连
+                    print(f"[解码中断 {self.name}] {e}，重连...")
+                    container = None
+                    if self.on_stop:
+                        self.on_stop()   # 释放上一会话（ICC），下次重取 URL
+                    time.sleep(1.0)
+        finally:
+            if self.on_stop:
+                self.on_stop()
 
 
 def main():
@@ -158,7 +172,31 @@ def main():
     run_log = ROOT / cfg['output']['run_log_dir'] / f"run_{datetime.now():%Y%m%d_%H%M%S}.csv"
     run_log.parent.mkdir(parents=True, exist_ok=True)
 
-    readers = [StreamReader(s['url'], cfg['sampling']['detect_interval']) for s in cfg['streams']]
+    # 流 URL：静态 RTSP，或 ICC（icc_device）动态取 URL+token
+    icc_prov = None
+    if any(s.get('icc_device') for s in cfg['streams']):
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent))
+        from icc_rtsp_provider import ICCProvider, load_creds
+        icc_code = next(s.get('icc_code', 'HK02') for s in cfg['streams'] if s.get('icc_device'))
+        icc_prov = ICCProvider(load_creds(icc_code))
+        print(f'ICC provider 就绪 code={icc_code}')
+
+    def make_reader(s):
+        if not s.get('icc_device'):
+            return StreamReader(s['url'], cfg['sampling']['detect_interval'], name=s['name'])
+        dev, ch = str(s['icc_device']), int(s.get('icc_channel', 0))
+
+        def resolve():
+            d = icc_prov.start_video(dev, ch)
+            return f"{d['url'].split('|')[-1]}&token={d['token']}"
+
+        def release():
+            icc_prov.stop_video(dev, ch)
+
+        return StreamReader(resolve, cfg['sampling']['detect_interval'], name=s['name'], on_stop=release)
+
+    readers = [make_reader(s) for s in cfg['streams']]
     for r in readers:
         r.start()
 
