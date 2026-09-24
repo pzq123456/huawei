@@ -1,0 +1,97 @@
+# 14路混采配置：老路（7 dahua + 4 ICC）+ 高速3路，总 600 张
+# 权重靠 quota（分路目标张数）+ detect_interval（忙路送检更快）实现
+streams:
+  # 高速3路（忙路多给，送检 1s）
+  - {name: hwy0548, url: "rtsp://118.140.234.166:8554/dahua548", quota: 120, detect_interval: 1.0, min_save_interval: 20.0, crop: none}
+  - {name: hwy0866, url: "rtsp://118.140.234.166:8554/dahua866", quota: 100, detect_interval: 1.0, min_save_interval: 20.0, crop: none}
+  - {name: hwy1003, url: "rtsp://118.140.234.166:8554/dahua1003", quota: 80, detect_interval: 1.0, min_save_interval: 20.0, crop: none}
+  # 老 dahua 7路（按上次产量比例分200张，1798上次0张已踢掉，送检 2s）
+  # 老 dahua 7路（9-23复验：命名与物理机位已漂移，OSD见scene_note；1780=工地院子无路、1871=桥洞空地已砍）
+  - {name: dahua1001636, url: "rtsp://118.140.234.166:8554/dahua1001636", quota: 20, detect_interval: 2.0, min_save_interval: 30.0, crop: auto-left}
+  - {name: dahua1001527, url: "rtsp://118.140.234.166:8554/dahua1001527", quota: 40, detect_interval: 2.0, min_save_interval: 30.0, crop: auto-left}
+  - {name: dahua1001637, url: "rtsp://118.140.234.166:8554/dahua1001637", quota: 40, detect_interval: 2.0, min_save_interval: 30.0, crop: auto-left}
+  - {name: dahua1001638, url: "rtsp://118.140.234.166:8554/dahua1001638", quota: 35, detect_interval: 2.0, min_save_interval: 30.0, crop: auto-left}
+  - {name: dahua1001956, url: "rtsp://118.140.234.166:8554/dahua1001956", quota: 55, detect_interval: 2.0, min_save_interval: 30.0, crop: auto-left}
+  - {name: dahua1001780, url: "rtsp://118.140.234.166:8554/dahua1001780", quota: 0, detect_interval: 2.0, min_save_interval: 30.0, crop: auto-left}
+  - {name: dahua1001871, url: "rtsp://118.140.234.166:8554/dahua1001871", quota: 0, detect_interval: 2.0, min_save_interval: 30.0, crop: auto-left}
+  # ICC 4路（cam2200=货车特写保留加量；2181人行道/2249树糊/2250自行车道已砍）
+  - {name: cam2181, icc_device: "1002605", icc_channel: 0, icc_code: HK02, quota: 0, detect_interval: 2.0, min_save_interval: 30.0, crop: none}
+  - {name: cam2200, icc_device: "1002689", icc_channel: 0, icc_code: HK02, quota: 60, detect_interval: 2.0, min_save_interval: 30.0, crop: none}
+  - {name: cam2249, icc_device: "1002712", icc_channel: 0, icc_code: HK02, quota: 0, detect_interval: 2.0, min_save_interval: 30.0, crop: none}
+  - {name: cam2250, icc_device: "1002711", icc_channel: 0, icc_code: HK02, quota: 0, detect_interval: 2.0, min_save_interval: 30.0, crop: none}
+
+model:
+  weights: "runs/detect/yolo26m_merged12_20260922_0757/weights/best.pt"
+  fallback: "runs/detect/yolo26m_merged12_20260922_0757/weights/best.pt"
+  imgsz: 960
+  conf_scoring: 0.30      # 强类阈值/打分基线
+  conf_low: 0.12          # 弱类低阈捡漏，交人工判断
+  conf_low_classes: ['LGV', 'Container', 'HGV', 'Van', 'Motorcycle', 'MGV']
+  conf_overrides:         # Motorcycle 低召回+高幻觉，维持高阈避免放大 FP
+    Motorcycle: 0.35
+  device: 0
+
+# 类别口径: merged12（12类，含 Container）
+classes: merged12
+names_merged12: ['Coach', 'Franchised Bus', 'HGV', 'LGV', 'Light Bus', 'MGV', 'Motorcycle', 'PLB GMB', 'Private Car', 'Taxi', 'Van', 'Container']
+
+sampling:
+  detect_interval: 2.0     # 默认送检间隔(s)，各流可覆盖
+  min_save_interval: 25.0  # 默认同相机落盘最小间隔(s)，各流可覆盖
+  unconditional_interval: 180.0
+  unconditional_max_ratio: 0.05  # 坏机位教训：定时盲采降到5%，只补真正盲区
+  target_total: 550  # 300高速 + 190老路 + 60优质ICC（砍掉5路坏场景后）
+  phash_thresh: 8
+  car_only_max_ratio: 0.15
+  gray_filter:
+    std_thresh: 12.0
+    sat_thresh: 12.0
+    chan_diff_thresh: 8.0
+
+# 复杂画面门槛：多车优先，1~2辆私家车不要
+complexity:
+  ultra_keep_singleton: ['LGV', 'Container', 'Motorcycle', 'HGV']  # 超稀有类允许单框
+  min_boxes: 3            # 非超稀有帧至少3框，或...
+  min_boxes_multiclass: 2 # ...2框且>=2类才收
+
+clean_capture:
+  enabled: true
+  edge_margin: 2
+  min_box_area_frac: 0.0015
+  laplacian_var_min: 100.0
+
+scoring:
+  w_cls: 1.0
+  w_box: 0.3
+  rare_w:                 # merged12口径，弱类加权
+    Container: 8.0
+    LGV: 5.0
+    HGV: 5.0
+    Motorcycle: 3.0
+    Van: 3.0
+    MGV: 2.0
+    PLB GMB: 2.0
+    Coach: 1.5
+    Light Bus: 1.5
+    Franchised Bus: 0.5
+    Taxi: 0.2
+    Private Car: 0.1
+
+balance:
+  drop_empty: true
+  drop_single_private_car: true
+  require_weak: true      # 只保留含弱类的帧
+  weak_classes: ['LGV', 'Container', 'HGV', 'Van', 'Motorcycle', 'MGV']
+  soft_cam_class_cap: 60
+  soft_cap_drop_prob: 0.8
+  strong_frame_caps:
+    Private Car: 40
+    Taxi: 30
+    MGV: 80
+    Franchised Bus: 20
+
+output:
+  dataset_dir: "dataset/rtsp_mine_600_highway15_pending"
+  run_log_dir: "output/rtsp_mine_300"
+  json_mode: prelabel
+  jpeg_quality: 95

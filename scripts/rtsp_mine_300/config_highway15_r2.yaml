@@ -1,0 +1,96 @@
+# 第2轮采集：目标300张（含resume已有的58张），弱类优先 + 多车复杂 + 避免空镜
+# 选路依据：
+#   stats_by_camera.py（已标注数据按机位统计）+ survey_round2{,b,c}
+#   保留=真实路面车流；ban=工地/料场(检出多为误报)
+streams:
+  - {name: dahua1001637, url: "rtsp://118.140.234.166:8554/dahua1001637", quota: 40, detect_interval: 1.0, min_save_interval: 12.0, crop: none}
+  - {name: dahua1001638, url: "rtsp://118.140.234.166:8554/dahua1001638", quota: 35, detect_interval: 1.0, min_save_interval: 12.0, crop: none}
+  - {name: dahua1001527, url: "rtsp://118.140.234.166:8554/dahua1001527", quota: 40, detect_interval: 1.0, min_save_interval: 12.0, crop: auto-left}
+  - {name: dahua1001636, url: "rtsp://118.140.234.166:8554/dahua1001636", quota: 40, detect_interval: 1.0, min_save_interval: 12.0, crop: none}
+  - {name: dahua1001619, url: "rtsp://118.140.234.166:8554/dahua1001619", quota: 35, detect_interval: 1.0, min_save_interval: 12.0, crop: auto-left}
+  - {name: dahua1001597, url: "rtsp://118.140.234.166:8554/dahua1001597", quota: 30, detect_interval: 1.0, min_save_interval: 15.0, crop: none}
+  - {name: dahua1001640, url: "rtsp://118.140.234.166:8554/dahua1001640", quota: 30, detect_interval: 1.0, min_save_interval: 15.0, crop: none}
+  - {name: dahua1001566, url: "rtsp://118.140.234.166:8554/dahua1001566", quota: 15, detect_interval: 1.5, min_save_interval: 15.0, crop: none}
+  - {name: dahua1001871, url: "rtsp://118.140.234.166:8554/dahua1001871", quota: 15, detect_interval: 1.5, min_save_interval: 15.0, crop: none}
+  - {name: dahua500, url: "rtsp://118.140.234.166:8554/dahua500", quota: 20, detect_interval: 1.5, min_save_interval: 15.0, crop: none}
+  # --- 已ban（画面不对：工地/料场，检出多为误报）---
+  # 1002083=OSD1255工地 1001741=OSD1277工地 1001505=桥面工地
+  # 1001658=OSD1470料场 1001956=OSD1710工地 496=IPC-496泥地
+  # --- 高速3路当前404，恢复后再用 --resume 补 ---
+
+model:
+  weights: "runs/detect/yolo26m_merged12_20260922_0757/weights/best.pt"
+  fallback: "runs/detect/yolo26m_merged12_20260922_0757/weights/best.pt"
+  imgsz: 960
+  conf_scoring: 0.30      # 强类阈值/打分基线
+  conf_low: 0.18          # 弱类低阈捡漏，交人工判断
+  conf_low_classes: ['LGV', 'Container', 'HGV', 'Van', 'Motorcycle', 'MGV']
+  conf_overrides: {}
+  device: 0
+
+classes: merged12
+names_merged12: ['Coach', 'Franchised Bus', 'HGV', 'LGV', 'Light Bus', 'MGV', 'Motorcycle', 'PLB GMB', 'Private Car', 'Taxi', 'Van', 'Container']
+
+sampling:
+  detect_interval: 1.5
+  min_save_interval: 15.0
+  unconditional_interval: 0.0     # 关闭盲采：上次70张空框的根源
+  unconditional_max_ratio: 0.0
+  target_total: 300
+  phash_thresh: 8
+  gray_filter:
+    std_thresh: 12.0
+    sat_thresh: 12.0
+    chan_diff_thresh: 8.0
+
+# 复杂画面门槛：多车优先，空镜/单私家车不要
+complexity:
+  target_classes: ['Container', 'LGV', 'HGV', 'Motorcycle']  # 稀有类：>=2框即可
+  target_min_boxes: 2
+  motorcycle_singleton: false
+  weak_min_boxes: 3                                            # 其余弱类(Van/MGV)：>=3框
+  no_weak_min_boxes: 4                                         # 无弱类：>=4框且>=3类
+  no_weak_min_classes: 3
+
+clean_capture:
+  enabled: true
+  edge_margin: 2
+  min_box_area_frac: 0.0015
+  laplacian_var_min: 100.0
+
+scoring:
+  w_cls: 1.0
+  w_box: 0.3
+  rare_w:
+    Container: 8.0
+    LGV: 5.0
+    HGV: 5.0
+    Motorcycle: 3.0
+    Van: 3.0
+    MGV: 2.5
+    PLB GMB: 2.0
+    Coach: 1.5
+    Light Bus: 1.5
+    Franchised Bus: 0.5
+    Taxi: 0.2
+    Private Car: 0.1
+
+balance:
+  drop_empty: true
+  drop_single_private_car: true
+  require_weak: false     # 允许少量"多车多类但无弱类"的复杂帧
+  no_weak_max_ratio: 0.15 # ...最多占总目标15%
+  weak_classes: ['LGV', 'Container', 'HGV', 'Van', 'Motorcycle', 'MGV']
+  soft_cam_class_cap: 60
+  soft_cap_drop_prob: 0.8
+  strong_frame_caps:
+    Private Car: 40
+    Taxi: 30
+    MGV: 80
+    Franchised Bus: 20
+
+output:
+  dataset_dir: "dataset/rtsp_mine_300_r2_pending"
+  run_log_dir: "output/rtsp_mine_300"
+  json_mode: prelabel
+  jpeg_quality: 95
