@@ -1,0 +1,92 @@
+# 第3轮采集（r3）：基于 0643 新模型，专挖弱类富集的难样本
+# 规则：n_box>=4 且 弱类框>=2（weak_min_count），无弱类帧不要
+# 选路：复用 r2 十路真实路面（工地/料场已ban）；输出到 tmp/ 暂存，标注后再并入 12 类
+streams:
+  - {name: dahua1001637, url: "rtsp://118.140.234.166:8554/dahua1001637", detect_interval: 1.0, min_save_interval: 12.0, crop: none}
+  - {name: dahua1001638, url: "rtsp://118.140.234.166:8554/dahua1001638", detect_interval: 1.0, min_save_interval: 12.0, crop: none}
+  - {name: dahua1001527, url: "rtsp://118.140.234.166:8554/dahua1001527", detect_interval: 1.0, min_save_interval: 12.0, crop: auto-left}
+  - {name: dahua1001636, url: "rtsp://118.140.234.166:8554/dahua1001636", detect_interval: 1.0, min_save_interval: 12.0, crop: none}
+  - {name: dahua1001619, url: "rtsp://118.140.234.166:8554/dahua1001619", detect_interval: 1.0, min_save_interval: 12.0, crop: auto-left}
+  - {name: dahua1001597, url: "rtsp://118.140.234.166:8554/dahua1001597", detect_interval: 1.5, min_save_interval: 15.0, crop: none}
+  - {name: dahua1001640, url: "rtsp://118.140.234.166:8554/dahua1001640", detect_interval: 1.5, min_save_interval: 15.0, crop: none}
+  - {name: dahua1001566, url: "rtsp://118.140.234.166:8554/dahua1001566", detect_interval: 1.5, min_save_interval: 15.0, crop: none}
+  - {name: dahua1001871, url: "rtsp://118.140.234.166:8554/dahua1001871", detect_interval: 1.5, min_save_interval: 15.0, crop: none}
+  - {name: dahua500, url: "rtsp://118.140.234.166:8554/dahua500", detect_interval: 1.5, min_save_interval: 15.0, crop: none}
+
+model:
+  weights: "runs/detect/yolo26m_merged12_20260923_0643/weights/best.pt"
+  fallback: "runs/detect/yolo26m_merged12_20260923_0643/weights/best.pt"
+  imgsz: 960
+  conf_scoring: 0.30      # 强类阈值/打分基线
+  conf_low: 0.18          # 弱类低阈捡漏，交人工判断
+  conf_low_classes: ['LGV', 'Container', 'HGV', 'Van', 'Motorcycle', 'MGV']
+  conf_overrides: {}
+  device: 0
+
+classes: merged12
+names_merged12: ['Coach', 'Franchised Bus', 'HGV', 'LGV', 'Light Bus', 'MGV', 'Motorcycle', 'PLB GMB', 'Private Car', 'Taxi', 'Van', 'Container']
+
+sampling:
+  detect_interval: 1.5
+  min_save_interval: 15.0
+  unconditional_interval: 0.0     # 关闭盲采
+  unconditional_max_ratio: 0.0
+  target_total: 300
+  phash_thresh: 8
+  gray_filter:
+    std_thresh: 12.0
+    sat_thresh: 12.0
+    chan_diff_thresh: 8.0
+
+# 难样本门槛：4框起 + 弱类框>=2；无弱类一律不要
+complexity:
+  target_classes: ['Container', 'LGV', 'HGV', 'Motorcycle']
+  target_min_boxes: 4
+  motorcycle_singleton: false
+  weak_min_boxes: 4
+  weak_min_count: 2               # 弱类框数下限（r3 新增，见 collect_highway15.py）
+  no_weak_min_boxes: 4
+  no_weak_min_classes: 3
+
+clean_capture:
+  enabled: true
+  edge_margin: 2
+  min_box_area_frac: 0.0015
+  laplacian_var_min: 100.0
+
+scoring:
+  w_cls: 1.0
+  w_box: 0.3
+  rare_w:
+    Container: 8.0
+    Motorcycle: 8.0               # r2未见集 AP 0.28，最弱，置顶
+    LGV: 6.0
+    HGV: 4.0
+    Van: 4.0
+    MGV: 2.5
+    PLB GMB: 2.0
+    Coach: 1.5
+    Light Bus: 1.5
+    Franchised Bus: 0.5
+    Taxi: 0.2
+    Private Car: 0.1
+
+balance:
+  drop_empty: true
+  drop_single_private_car: true
+  require_weak: true        # 必须含弱类
+  no_weak_max_ratio: 0.0    # 无弱类帧配额=0
+  weak_classes: ['LGV', 'Container', 'HGV', 'Van', 'Motorcycle', 'MGV']
+  soft_cam_class_cap: 60
+  soft_cap_drop_prob: 0.8
+  strong_frame_caps:
+    Private Car: 40
+    Taxi: 30
+    MGV: 80
+    Franchised Bus: 20
+
+output:
+  dataset_dir: "tmp/r3_mine_300_pending"
+  run_log_dir: "output/rtsp_mine_300"
+  json_mode: prelabel
+  jpeg_quality: 95

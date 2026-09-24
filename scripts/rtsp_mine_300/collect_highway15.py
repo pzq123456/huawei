@@ -1,10 +1,11 @@
-"""14路混采：老路 + 高速3路，按 quota 分权重，弱类优先 + 复杂画面门槛 + 进度打印。
+"""多路 RTSP 混采：无配额，弱类优先 + 复杂画面门槛 + 进度打印。
 
 和 collect.py 的区别：
-  1. streams 各自带 quota / detect_interval / min_save_interval，配额满即停该路；
+  1. streams 各自带 detect_interval / min_save_interval；全局目标打满为止，
+     产量即弱类信号（配额已移除，单机位垄断由 soft-cap 抑制）；
   2. 复杂画面门槛：超稀有类(LGV/Container/Motorcycle/HGV)允许单框，
      其余要求 >=3框 或 (>=2框且>=2类)，纯 Private Car/Taxi 帧一律不要；
-  3. 进度打印：每次落盘 + 每30s心跳（总进度/各路quota/弱类直方图/丢弃原因/ETA）。
+  3. 进度打印：每次落盘 + 每30s心跳（总进度/各路产量/弱类直方图/丢弃原因/ETA）。
 
 用法：
   python scripts/rtsp_mine_300/collect_highway15.py --smoke-test
@@ -57,13 +58,12 @@ def fmt_eta(elapsed: float, done: int, total: int) -> str:
     return f"{m:02d}:{s:02d}"
 
 
-def print_progress(total_saved, target, t_start, per_cam, quotas, weak_hist, reasons):
+def print_progress(total_saved, target, t_start, per_cam, weak_hist, reasons):
     el = time.time() - t_start
     pct = 100.0 * total_saved / max(target, 1)
     line = f"[进度 {total_saved}/{target} {pct:5.1f}% | 用时{el/60:.1f}min ETA{fmt_eta(el, total_saved, target)}]"
     print(line, flush=True)
-    qparts = " ".join(f"{c}:{per_cam.get(c, 0)}/{quotas.get(c, 0)}"
-                      for c in sorted(quotas))
+    qparts = " ".join(f"{c}:{per_cam.get(c, 0)}" for c in sorted(per_cam))
     print(f"  各路: {qparts}", flush=True)
     if weak_hist:
         top = " ".join(f"{k}x{v}" for k, v in weak_hist.most_common(8))
@@ -104,12 +104,7 @@ def main():
     target = args.target or cfg["sampling"]["target_total"]
     json_mode = args.json_mode or cfg["output"]["json_mode"]
     names = cfg["names_merged12"]
-    quotas = {s["name"]: int(s.get("quota", 0)) for s in cfg["streams"]}
-    # quota 全0时退化为均分
-    if sum(quotas.values()) <= 0:
-        q = max(1, target // len(cfg["streams"]))
-        quotas = {s["name"]: q for s in cfg["streams"]}
-    target = min(target, sum(quotas.values()))
+    # 无配额：全局目标打满为止，产量即弱类信号；单机位垄断由 soft-cap 抑制
 
     from ultralytics import YOLO
     weights = Path(cfg["model"]["weights"])
@@ -171,11 +166,12 @@ def main():
     # resume：按文件名后缀统计各路已有张数
     per_cam = Counter()
     existing = 0
+    known_cams = {s["name"] for s in cfg["streams"]}
     if args.resume:
         for p in img_dir.glob("*.jpg"):
             stem = p.stem
             cam = stem.rsplit("_", 1)[-1] if "_" in stem else ""
-            if cam in quotas:
+            if cam in known_cams:
                 per_cam[cam] += 1
                 existing += 1
     total_saved = 0
@@ -217,6 +213,7 @@ def main():
     allow_with_target = int(cx.get("allow_with_target", min_mc))
     moto_singleton = bool(cx.get("motorcycle_singleton", False))
     weak_min_boxes = int(cx.get("weak_min_boxes", min_boxes))
+    weak_min_count = int(cx.get("weak_min_count", 1))  # r3: 弱类框数下限，默认1=旧行为
     target_min_boxes = int(cx.get("target_min_boxes", allow_with_target))
     noweak_min_boxes = int(cx.get("no_weak_min_boxes", min_boxes))
     noweak_min_classes = int(cx.get("no_weak_min_classes", 3))
@@ -252,16 +249,14 @@ def main():
         manifest.writerow(["file", "cam", "timestamp", "score", "n_box", "n_cls",
                            "rare_hit", "weak_hit", "json_mode", "uncond", "n_filtered"])
 
-    print(f"开始混采：14路（高速3+老路11），本次新采目标={target_new} 总配额={sum(quotas.values())} "
+    print(f"开始混采：{len(cfg['streams'])}路无配额，本次新采目标={target_new} "
           f"输出={ds_dir}", flush=True)
-    print(f"配额: {quotas}", flush=True)
-    print(f"弱类={sorted(weak_classes)} 复杂门槛: 超稀有{sorted(ultra)}允许单框, "
-          f"其余>={min_boxes}框或(>={min_mc}框且>=2类)，纯私家车/Taxi不要", flush=True)
+    print(f"弱类={sorted(weak_classes)} 复杂门槛: "
+          f"含弱类>={weak_min_boxes}框且弱类框>={weak_min_count}，纯私家车/Taxi不要", flush=True)
 
     t_start = time.time()
     last_heartbeat = t_start
     smoke_deadline = 240.0
-    quota_met_logged = set()
     smoke_seen = Counter()
 
     with open(run_log, "w", newline="", encoding="utf-8") as log_f:
@@ -274,16 +269,8 @@ def main():
                     if args.max_minutes and time.time() - t_start > args.max_minutes * 60:
                         print(f"[到点] 已运行 {args.max_minutes:.0f} 分钟，优雅退出", flush=True)
                         break
-                    if all(per_cam.get(s["name"], 0) >= quotas[s["name"]] for s in cfg["streams"]):
-                        print("全部配额已满，提前结束", flush=True)
-                        break
                     for s, r in zip(cfg["streams"], readers):
                         cam = s["name"]
-                        if per_cam.get(cam, 0) >= quotas[cam]:
-                            if cam not in quota_met_logged:
-                                print(f"[配额满] {cam} {per_cam[cam]}/{quotas[cam]}，该路停止", flush=True)
-                                quota_met_logged.add(cam)
-                            continue
                         try:
                             frame = r.q.get(timeout=1.0)
                         except queue.Empty:
@@ -340,7 +327,7 @@ def main():
                                   flush=True)
                             total_saved += 1
                             smoke_seen[cam] += 1
-                            live_cams = [c for c in quotas if smoke_seen[c] > 0]
+                            live_cams = [c for c in smoke_seen if smoke_seen[c] > 0]
                             if live_cams and (all(smoke_seen[c] >= 3 for c in live_cams)
                                               or time.time() - t_start > 90):
                                 print(f"smoke ok 有效流={live_cams}", flush=True)
@@ -374,6 +361,8 @@ def main():
                                 )
                                 if not ok_complex:
                                     reason = "too-simple"
+                                elif weak_min_count > 1 and sum(1 for l in labels if l in weak_classes) < weak_min_count:
+                                    reason = "weak-few"
                                 elif require_weak and not has_weak:
                                     reason = "no-weak"
                             else:
@@ -416,7 +405,7 @@ def main():
                             el = time.time() - t_start
                             pct = 100.0 * total_saved / max(target_new, 1)
                             print(f"[{total_saved}/{target_new} {pct:5.1f}%] {fname} "
-                                  f"{cam}({per_cam[cam]}/{quotas[cam]}) score={sc:.1f} "
+                                  f"{cam}({per_cam[cam]}) score={sc:.1f} "
                                   f"n={len(labels)} {labels} ETA{fmt_eta(el, total_saved, target_new)}",
                                   flush=True)
                             manifest.writerow([fname, cam, ts, f"{sc:.2f}", len(labels),
@@ -428,7 +417,7 @@ def main():
                         log.writerow([f"{cam}_{int(now)}", cam, f"{sc:.2f}", len(labels),
                                       len(set(labels)), rare_hit, int(reason in ("ok", "uncond")), reason])
                         if time.time() - last_heartbeat >= HEARTBEAT_SECS:
-                            print_progress(total_saved, target_new, t_start, per_cam, quotas,
+                            print_progress(total_saved, target_new, t_start, per_cam,
                                            weak_hist, reasons)
                             last_heartbeat = time.time()
         except KeyboardInterrupt:
@@ -438,7 +427,7 @@ def main():
                 r.stopped = True
             dump_cap_state()
             manifest_f.close()
-    print_progress(total_saved, target_new, t_start, per_cam, quotas, weak_hist, reasons)
+    print_progress(total_saved, target_new, t_start, per_cam, weak_hist, reasons)
     print(f"done: 本次 {total_saved} 张 -> {ds_dir}，过程日志 {run_log}", flush=True)
 
 
