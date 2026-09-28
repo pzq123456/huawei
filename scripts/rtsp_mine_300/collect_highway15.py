@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from collect import (  # noqa: E402
     StreamReader,
     bbox_touches_edge,
+    dedup_boxes,
     is_gray_screen,
     phash,
     roi_sharpness,
@@ -182,6 +183,7 @@ def main():
     last_save = {s["name"]: 0.0 for s in cfg["streams"]}
     last_hash: dict = {}
     weak_hist = Counter()
+    tgt_hist = Counter()  # r4: 类目标进度（focus类帧数）
     reasons: list = []
     cls_cam_cnt = Counter()
     cap_state_path = ds_dir / "soft_cap_state.json"
@@ -214,6 +216,15 @@ def main():
     moto_singleton = bool(cx.get("motorcycle_singleton", False))
     weak_min_boxes = int(cx.get("weak_min_boxes", min_boxes))
     weak_min_count = int(cx.get("weak_min_count", 1))  # r3: 弱类框数下限，默认1=旧行为
+    _fc = cx.get("focus_classes", None)
+    if _fc:
+        focus_classes = set(_fc)
+    else:  # 兼容旧 focus_class 单值
+        _one = str(cx.get("focus_class", "") or "").strip()
+        focus_classes = {_one} if _one else set()
+    focus_min_boxes = int(cx.get("focus_min_boxes", 3))
+    focus_min_count = int(cx.get("focus_min_count", 2))
+    class_targets = {str(k): int(v) for k, v in (cfg.get("class_targets", {}) or {}).items()}
     target_min_boxes = int(cx.get("target_min_boxes", allow_with_target))
     noweak_min_boxes = int(cx.get("no_weak_min_boxes", min_boxes))
     noweak_min_classes = int(cx.get("no_weak_min_classes", 3))
@@ -248,6 +259,18 @@ def main():
     if not (args.resume and manifest_exists):
         manifest.writerow(["file", "cam", "timestamp", "score", "n_box", "n_cls",
                            "rare_hit", "weak_hit", "json_mode", "uncond", "n_filtered"])
+    if args.resume and manifest_exists:
+        try:
+            import csv as _csv
+            with open(manifest_path, encoding="utf-8") as _f:
+                for _r in _csv.DictReader(_f):
+                    for _c in class_targets:
+                        if _r.get("rare_hit") == _c or _r.get("weak_hit") == _c:
+                            tgt_hist[_c] += 1
+            if tgt_hist:
+                print(f"类目标进度载入 {dict(tgt_hist)}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[warn] 类目标进度读取失败: {e}", flush=True)
 
     print(f"开始混采：{len(cfg['streams'])}路无配额，本次新采目标={target_new} "
           f"输出={ds_dir}", flush=True)
@@ -268,6 +291,9 @@ def main():
                 while total_saved < target_new:
                     if args.max_minutes and time.time() - t_start > args.max_minutes * 60:
                         print(f"[到点] 已运行 {args.max_minutes:.0f} 分钟，优雅退出", flush=True)
+                        break
+                    if class_targets and all(tgt_hist.get(c, 0) >= n for c, n in class_targets.items()):
+                        print(f"[类目标达成] {dict(tgt_hist)} vs {class_targets}，结束", flush=True)
                         break
                     for s, r in zip(cfg["streams"], readers):
                         cam = s["name"]
@@ -303,6 +329,8 @@ def main():
                                     n_filtered += 1
                                     continue
                             kept.append((label, cf, xy))
+                        kept, n_dup = dedup_boxes(kept)
+                        n_filtered += n_dup
                         labels = [k[0] for k in kept]
                         sc = score_dets(labels, cfg["scoring"]["rare_w"],
                                         cfg["scoring"]["w_cls"], cfg["scoring"]["w_box"])
@@ -359,9 +387,11 @@ def main():
                                     or (has_target and n_lab >= target_min_boxes)
                                     or n_lab >= weak_min_boxes
                                 )
-                                if not ok_complex:
+                                n_focus = sum(1 for l in labels if l in focus_classes) if focus_classes else 0
+                                focus_ok = bool(focus_classes) and n_focus >= focus_min_count and n_lab >= focus_min_boxes
+                                if not ok_complex and not focus_ok:
                                     reason = "too-simple"
-                                elif weak_min_count > 1 and sum(1 for l in labels if l in weak_classes) < weak_min_count:
+                                elif not focus_ok and weak_min_count > 1 and sum(1 for l in labels if l in weak_classes) < weak_min_count:
                                     reason = "weak-few"
                                 elif require_weak and not has_weak:
                                     reason = "no-weak"
@@ -401,6 +431,9 @@ def main():
                                 weak_hist[weak_hit] += 1
                             else:
                                 noweak_saved += 1
+                            for c in set(labels):
+                                if c in class_targets:
+                                    tgt_hist[c] += 1
                             dump_cap_state()
                             el = time.time() - t_start
                             pct = 100.0 * total_saved / max(target_new, 1)

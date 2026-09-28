@@ -60,6 +60,35 @@ def phash(img, hash_size: int = 8) -> int:
     return sum(1 << i for i, v in enumerate(diff.flatten()) if v)
 
 
+def box_iou(a, b) -> float:
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / max(union, 1e-9)
+
+
+def dedup_boxes(kept, iou_thresh: float = 0.85):
+    """同类高重叠框去重：低阈预标注常在同一目标上叠多个框，保留最高分。返回 (kept, n_dup)。"""
+    by_cls: dict = {}
+    for item in kept:
+        by_cls.setdefault(item[0], []).append(item)
+    out, n_dup = [], 0
+    for items in by_cls.values():
+        items.sort(key=lambda t: -t[1])
+        used = [False] * len(items)
+        for i, (_, _, xy) in enumerate(items):
+            if used[i]:
+                continue
+            out.append(items[i])
+            for j in range(i + 1, len(items)):
+                if not used[j] and box_iou(xy, items[j][2]) >= iou_thresh:
+                    used[j] = True
+                    n_dup += 1
+    out.sort(key=lambda t: -t[1])
+    return out, n_dup
+
+
 def bbox_touches_edge(xyxy, w: int, h: int, seam, margin: float = 2.0) -> bool:
     """检测框是否触碰真实图像边界。seam 为 apply_crop 产生的拼接缝所在侧
     （'right'/'left'），拼缝不是真实边界，对应侧不计入贴边判定。"""
@@ -312,6 +341,8 @@ def main():
                                     n_filtered += 1
                                     continue
                             kept.append((label, cf, xy))
+                        kept, n_dup = dedup_boxes(kept)
+                        n_filtered += n_dup
                         labels = [k[0] for k in kept]
                         sc = score_dets(labels, cfg['scoring']['rare_w'], cfg['scoring']['w_cls'], cfg['scoring']['w_box'])
                         rare_hit = next((l for l in labels if cfg['scoring']['rare_w'].get(l, 0) >= 2.0), '')
